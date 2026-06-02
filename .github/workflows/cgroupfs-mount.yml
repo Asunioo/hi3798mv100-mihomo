@@ -15,7 +15,7 @@ jobs:
       image: debian:trixie
       
     steps:
-      # 1. 检出当前仓库的代码（如果您需要修改源码，这一步是必须的）
+      # 1. 检出当前仓库的代码
       - name: Checkout repository
         uses: actions/checkout@v4
         
@@ -41,9 +41,14 @@ jobs:
           # 执行本地编译打包（跳过 GPG 签名步骤）
           debuild -us -uc -b
           
+          # 【关键修复】将上一级目录生成的 .deb 包移动到当前工作区根目录下
+          # 避免 upload-artifact@v4 不支持 '..' 相对路径的问题
+          mv ../*.deb ./ || echo "No deb files found in parent directory"
+          
       # 4. 将编译生成的 .deb 安装包作为 Artifact 上传保存
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: cgroupfs-mount-deb
-          path: ../*.deb
+          # 现在直接使用当前目录下的通配符匹配即可
+          path: "*.deb"
