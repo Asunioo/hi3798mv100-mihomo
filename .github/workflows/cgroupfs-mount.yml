@@ -29,46 +29,28 @@ jobs:
             dpkg-dev \
             fakeroot \
             debhelper \
-            dh-make \
             git
             
-      # 3. 获取上游源码并使用 dh_make 初始化打包结构
-      - name: Initialize Debian packaging structure
+      # 3. 获取上游源码并直接编译打包（无需 dh_make）
+      - name: Build Debian package
         run: |
-          # 克隆上游源码仓库
+          # 克隆上游源码仓库（该仓库已自带 debian/ 目录）
           git clone https://github.com/tianon/cgroupfs-mount.git
+          cd cgroupfs-mount
           
-          # 【核心修复】Debian 规范要求源码目录必须是 <package>-<version> 格式
-          mv cgroupfs-mount cgroupfs-mount-1.0.0
-          cd cgroupfs-mount-1.0.0
-          
-          # 使用 dh_make 自动生成 debian/ 目录及 changelog
-          # -s: 表示这是一个单二进制文件/脚本类型的包 (Single binary)
-          # -y: 遇到确认提示时自动回答 yes
-          # --createorig: 【关键新增】自动将当前目录打包为 .orig.tar.xz，解决找不到源码包的报错
-          DEBFULLNAME="GitHub Actions" DEBEMAIL="actions@github.com" dh_make -s -y --createorig
-          
-      # 4. 在工作区根目录执行编译打包
-      - name: Build Debian package from GitHub
-        run: |
-          # 退回工作区根目录执行打包，确保产物直接生成在当前目录下
-          cd cgroupfs-mount-1.0.0 && cd ..
-          
-          # 清理可能存在的旧构建残留
-          rm -f *.deb *.changes *.buildinfo || true
-          
-          # 在工作区根目录执行本地编译打包（跳过 GPG 签名步骤）
+          # 【核心修复】跳过 GPG 签名，直接使用上游自带的 debian/ 目录进行二进制打包
           debuild -us -uc -b
           
-          # 列出当前目录的文件，方便在 CI 日志中排查是否生成了 .deb 包
-          echo "=== Files in current workspace ==="
-          ls -la *.deb || echo "Warning: No deb files generated!"
+          # 列出父目录的文件，方便在 CI 日志中排查是否生成了 .deb 包
+          echo "=== Generated Packages ==="
+          ls -la ../*.deb || echo "Warning: No deb files generated!"
           
-      # 5. 将编译生成的 .deb 安装包作为 Artifact 上传保存
+      # 4. 将编译生成的 .deb 安装包作为 Artifact 上传保存
       - name: Upload artifact
         uses: actions/upload-artifact@v5
         if: always()
         with:
           name: cgroupfs-mount-deb
-          path: "*.deb"
+          # debuild 默认会将产物输出到源码目录的上一级
+          path: "../*.deb"
           retention-days: 7
