@@ -38,17 +38,21 @@ jobs:
           # 克隆上游源码仓库
           git clone https://github.com/tianon/cgroupfs-mount.git
           
-          # 【核心修复】进入源码目录，使用 dh_make 自动生成 debian/ 目录及 changelog
+          # 【核心修复】Debian 规范要求源码目录必须是 <package>-<version> 格式
+          # 这里我们将克隆出的目录重命名为 cgroupfs-mount-1.0.0
+          mv cgroupfs-mount cgroupfs-mount-1.0.0
+          cd cgroupfs-mount-1.0.0
+          
+          # 使用 dh_make 自动生成 debian/ 目录及 changelog
           # -s: 表示这是一个单二进制文件/脚本类型的包 (Single binary)
           # -y: 遇到确认提示时自动回答 yes
-          cd cgroupfs-mount
           DEBFULLNAME="GitHub Actions" DEBEMAIL="actions@github.com" dh_make -s -y
           
       # 4. 在工作区根目录执行编译打包
       - name: Build Debian package from GitHub
         run: |
           # 退回工作区根目录执行打包，确保产物直接生成在当前目录下
-          cd cgroupfs-mount && cd ..
+          cd cgroupfs-mount-1.0.0 && cd ..
           
           # 清理可能存在的旧构建残留
           rm -f *.deb *.changes *.buildinfo || true
