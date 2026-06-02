@@ -31,19 +31,22 @@ jobs:
             debhelper \
             git
             
-      # 3. 获取上游源码并直接编译打包（无需 dh_make）
+      # 3. 获取上游源码并直接编译打包
       - name: Build Debian package
         run: |
           # 克隆上游源码仓库（该仓库已自带 debian/ 目录）
           git clone https://github.com/tianon/cgroupfs-mount.git
           cd cgroupfs-mount
           
-          # 【核心修复】跳过 GPG 签名，直接使用上游自带的 debian/ 目录进行二进制打包
+          # 跳过 GPG 签名，直接使用上游自带的 debian/ 目录进行二进制打包
           debuild -us -uc -b
           
-          # 列出父目录的文件，方便在 CI 日志中排查是否生成了 .deb 包
+          # 【核心修复】debuild 会将产物输出到上一级目录
+          # 将其移动回工作区根目录，以规避 upload-artifact 不支持 ../ 的限制
+          mv ../*.deb "${GITHUB_WORKSPACE}/"
+          
           echo "=== Generated Packages ==="
-          ls -la ../*.deb || echo "Warning: No deb files generated!"
+          ls -la "${GITHUB_WORKSPACE}"/*.deb || echo "Warning: No deb files generated!"
           
       # 4. 将编译生成的 .deb 安装包作为 Artifact 上传保存
       - name: Upload artifact
@@ -51,6 +54,6 @@ jobs:
         if: always()
         with:
           name: cgroupfs-mount-deb
-          # debuild 默认会将产物输出到源码目录的上一级
-          path: "../*.deb"
+          # 直接匹配工作区根目录下的 deb 文件，无需相对路径
+          path: "*.deb"
           retention-days: 7
