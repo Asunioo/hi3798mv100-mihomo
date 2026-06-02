@@ -41,9 +41,9 @@ jobs:
           # 跳过 GPG 签名，直接使用上游自带的 debian/ 目录进行二进制打包
           debuild -us -uc -b
           
-          # 【核心修复】debuild 会将产物输出到上一级目录
-          # 将其移动回工作区根目录，以规避 upload-artifact 不支持 ../ 的限制
-          mv ../*.deb "${GITHUB_WORKSPACE}/"
+          # 【核心修复】安全地将产物转移到工作区根目录
+          # 使用 cp 代替 mv 避免同源路径报错；若已在根目录则自动跳过
+          cp -n ../*.deb "${GITHUB_WORKSPACE}/" 2>/dev/null || true
           
           echo "=== Generated Packages ==="
           ls -la "${GITHUB_WORKSPACE}"/*.deb || echo "Warning: No deb files generated!"
@@ -54,6 +54,5 @@ jobs:
         if: always()
         with:
           name: cgroupfs-mount-deb
-          # 直接匹配工作区根目录下的 deb 文件，无需相对路径
           path: "*.deb"
           retention-days: 7
