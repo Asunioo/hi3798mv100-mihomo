@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ "main" ]
 
+# 【修复1】添加环境变量，强制 GitHub Actions 使用 Node.js 24 运行，消除弃用警告
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-debian-13:
     runs-on: ubuntu-latest
@@ -38,12 +42,19 @@ jobs:
           git clone https://github.com/tianon/cgroupfs-mount.git
           cd cgroupfs-mount
           
+          # 【修复2】清理可能存在的旧构建残留，防止 debuild 报错中断
+          rm -rf ../*.deb ../*.changes ../*.buildinfo || true
+          
           # 执行本地编译打包（跳过 GPG 签名步骤）
           debuild -us -uc -b
           
-          # 【关键修复】将上一级目录生成的 .deb 包移动到当前工作区根目录下
+          # 列出上级目录的文件，方便在 CI 日志中排查是否生成了 .deb 包
+          echo "=== Files in parent directory ==="
+          ls -la ..
+          
+          # 【修复3】安全地将上一级目录生成的 .deb 包移动到当前工作区根目录下
           # 避免 upload-artifact@v4 不支持 '..' 相对路径的问题
-          mv ../*.deb ./ || echo "No deb files found in parent directory"
+          find .. -maxdepth 1 -name "*.deb" -exec mv {} ./ \;
           
       # 4. 将编译生成的 .deb 安装包作为 Artifact 上传保存
       - name: Upload artifact
