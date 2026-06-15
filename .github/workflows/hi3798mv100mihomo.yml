@@ -10,33 +10,30 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout 本仓库
+      - name: Checkout 当前仓库
         uses: actions/checkout@v4
 
-      - name: Checkout mihomo 官方源码
-        uses: actions/checkout@v4
-        with:
-          repository: MetaCubeX/mihomo
-          ref: main
-          path: mihomo
-          fetch-depth: 0
-
-      # 安装 ARM 交叉编译工具链
-      - name: Install ARM cross toolchain
+      - name: 安装 ARM 交叉编译工具链
         run: |
           sudo apt update
-          sudo apt install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+          sudo apt install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross git
           arm-linux-gnueabihf-gcc --version
 
-      - name: Setup Go
+      - name: Setup Go 环境
         uses: actions/setup-go@v5
         with:
           go-version: 1.23
-          cache: true
-          cache-dependency-path: mihomo/go.sum
+          cache: false
 
-      # 编译 ARM 版 uname 伪装库
-      - name: Build armv7 libfakeuname.so
+      # 核心修复：直接 git clone 拉取 mihomo 源码，避免嵌套仓库干扰
+      - name: 克隆 mihomo 官方源码
+        run: |
+          git clone --depth 50 --branch main https://github.com/MetaCubeX/mihomo.git mihomo
+          cd mihomo
+          ls -la go.mod
+          go env GOMOD
+
+      - name: 编译 armv7 版 uname 伪装库
         run: |
           cat > uname_hack.c <<'EOF'
           #define _GNU_SOURCE
@@ -52,12 +49,10 @@ jobs:
               return ret;
           }
           EOF
-          # 用 ARM 交叉编译器编译
           arm-linux-gnueabihf-gcc -shared -fPIC -ldl uname_hack.c -o libfakeuname.so
           file libfakeuname.so
 
-      # 静态编译 mihomo armv7
-      - name: Compile mihomo armv7 static
+      - name: 静态编译 mihomo armv7 二进制
         env:
           CGO_ENABLED: 1
           GOOS: linux
@@ -65,9 +60,9 @@ jobs:
           GOARM: 7
           CC: arm-linux-gnueabihf-gcc
           CXX: arm-linux-gnueabihf-g++
+          GO111MODULE: on
         run: |
           cd mihomo
-          # 强制模块模式，指定入口包路径
           go build \
             -ldflags "-w -s -X github.com/metacubex/mihomo/constant.Version=$(git describe --tags --always)" \
             -tags "no_gvisor no_tun_newapi" \
@@ -77,8 +72,7 @@ jobs:
           chmod +x mihomo-linux-armv7-static
           file mihomo-linux-armv7-static
 
-      # 打包制品
-      - name: Package artifacts
+      - name: 打包发布制品
         run: |
           mkdir -p release
           cp mihomo-linux-armv7-static release/
@@ -95,7 +89,7 @@ jobs:
           tar -zcf mihomo-armv7-linux4.4.tar.gz -C release .
           ls -lh mihomo-armv7-linux4.4.tar.gz
 
-      - name: Upload Artifact
+      - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
           name: mihomo-armv7-linux4.4
