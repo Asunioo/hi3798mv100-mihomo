@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       latest_tag: ${{ steps.get_version.outputs.latest_tag }}
-      skip_build: ${{ steps.check_version.outputs.skip_build }}
+      skip_build: ${{ steps.skip_decision.outputs.skip_build }}
     
     steps:
       - name: Checkout 当前仓库
@@ -84,9 +84,9 @@ jobs:
         if: steps.skip_decision.outputs.skip_build == 'false'
         uses: actions/setup-go@v5
         with:
-          go-version: 'latest'
+          go-version: 'stable'   # 修复：stable 是官方认可的最新稳定版别名
           cache: false
-          check-latest: true
+          check-latest: true     # 确保拉取该分支下的最新补丁版
 
       - name: 下载并解压最新版 mihomo 源码
         if: steps.skip_decision.outputs.skip_build == 'false'
