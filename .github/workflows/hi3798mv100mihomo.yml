@@ -1,0 +1,94 @@
+name: Build Latest Mihomo for Hi3798MV100 (Patched Go Runtime)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mihomo_ref:
+        description: 'Mihomo branch/tag/commit (e.g., main, v1.19.0)'
+        required: true
+        default: 'main'
+      go_version:
+        description: 'Go version (>= 1.23 for latest mihomo)'
+        required: true
+        default: '1.24.4'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout mihomo source
+        uses: actions/checkout@v4
+        with:
+          repository: MetaCubeX/mihomo
+          ref: ${{ github.event.inputs.mihomo_ref }}
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ github.event.inputs.go_version }}
+          check-latest: true
+
+      - name: Patch Go runtime to tolerate non-standard kernel version
+        run: |
+          GOROOT=$(go env GOROOT)
+          TARGET="${GOROOT}/src/runtime/os_linux.go"
+          
+          echo "=== Patching ${TARGET} ==="
+          
+          # Go 1.21~1.24 的 getKernelVersion 在解析失败时会 throw
+          # 我们将 throw 替换为返回一个安全的默认值 (5.6.0)，使 32-bit time_t 检测安全跳过
+          # 原始代码模式: throw("failed to parse kernel version from uname")
+          sed -i 's|throw("failed to parse kernel version from uname")|return 5, 6, 0|g' "${TARGET}"
+          
+          # 验证补丁是否生效
+          if grep -q 'return 5, 6, 0' "${TARGET}"; then
+            echo "✅ Patch applied successfully"
+          else
+            echo "::error::Patch failed! The source pattern may have changed in this Go version."
+            echo "=== Context around getKernelVersion ==="
+            grep -n -A5 -B5 "parse kernel version" "${TARGET}" || true
+            exit 1
+          fi
+
+      - name: Install UPX
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq upx-ucl
+
+      - name: Build mihomo (static, armv7, patched runtime)
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: arm
+          GOARM: "7"
+        run: |
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "${{ github.event.inputs.mihomo_ref }}")
+          echo "Building mihomo ${VERSION} with patched Go $(go version)"
+          
+          go build \
+            -trimpath \
+            -ldflags "-s -w -X 'github.com/metacubex/mihomo/constant.Version=${VERSION}' -extldflags '-static'" \
+            -o mihomo-linux-armv7 \
+            .
+
+      - name: Compress with UPX
+        run: |
+          ls -lh mihomo-linux-armv7
+          upx --best --lzma mihomo-linux-armv7 || echo "UPX skipped"
+          ls -lh mihomo-linux-armv7
+
+      - name: Verify binary
+        run: |
+          file mihomo-linux-armv7
+          if ! file mihomo-linux-armv7 | grep -q "ELF 32-bit LSB executable, ARM"; then
+            echo "::error::Not a valid ARM 32-bit ELF"
+            exit 1
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mihomo-linux-armv7-latest-patched
+          path: mihomo-linux-armv7
+          retention-days: 30
