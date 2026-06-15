@@ -16,7 +16,7 @@ jobs:
       - name: 安装 ARM 交叉编译工具链
         run: |
           sudo apt update
-          sudo apt install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross git
+          sudo apt install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross wget tar
           arm-linux-gnueabihf-gcc --version
 
       - name: Setup Go 环境
@@ -25,10 +25,13 @@ jobs:
           go-version: 1.23
           cache: false
 
-      # 核心修复：直接 git clone 拉取 mihomo 源码，避免嵌套仓库干扰
-      - name: 克隆 mihomo 官方源码
+      # 核心修复：直接下载官方源码tar包，彻底避免git克隆失败问题
+      - name: 下载 mihomo 官方源码
         run: |
-          git clone --depth 50 --branch main https://github.com/MetaCubeX/mihomo.git mihomo
+          # 指定稳定版本 v1.19.25，避免main分支波动
+          wget -O mihomo-src.tar.gz https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.25.tar.gz
+          tar -zxf mihomo-src.tar.gz
+          mv mihomo-* mihomo
           cd mihomo
           ls -la go.mod
           go env GOMOD
@@ -63,11 +66,11 @@ jobs:
           GO111MODULE: on
         run: |
           cd mihomo
+          # 根目录直接编译，主入口就在根目录
           go build \
-            -ldflags "-w -s -X github.com/metacubex/mihomo/constant.Version=$(git describe --tags --always)" \
+            -ldflags "-w -s -X github.com/metacubex/mihomo/constant.Version=v1.19.25" \
             -tags "no_gvisor no_tun_newapi" \
-            -o ../mihomo-linux-armv7-static \
-            ./cmd/mihomo
+            -o ../mihomo-linux-armv7-static
           cd ..
           chmod +x mihomo-linux-armv7-static
           file mihomo-linux-armv7-static
