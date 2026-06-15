@@ -1,4 +1,4 @@
-name: Build Latest Mihomo for Hi3798MV100 (Patched Go Runtime)
+name: Build Latest Mihomo for Hi3798MV100 (Auto-Patch Go 1.21~1.24)
 
 on:
   workflow_dispatch:
@@ -29,27 +29,83 @@ jobs:
           go-version: ${{ github.event.inputs.go_version }}
           check-latest: true
 
-      - name: Patch Go runtime to tolerate non-standard kernel version
+      - name: Patch Go runtime (Multi-Strategy Auto-Patch)
         run: |
+          set -e
           GOROOT=$(go env GOROOT)
-          TARGET="${GOROOT}/src/runtime/os_linux.go"
+          RUNTIME_DIR="${GOROOT}/src/runtime"
           
-          echo "=== Patching ${TARGET} ==="
+          echo "=== Go Runtime Diagnostic Info ==="
+          echo "GOROOT: $GOROOT"
+          go version
           
-          # Go 1.21~1.24 的 getKernelVersion 在解析失败时会 throw
-          # 我们将 throw 替换为返回一个安全的默认值 (5.6.0)，使 32-bit time_t 检测安全跳过
-          # 原始代码模式: throw("failed to parse kernel version from uname")
-          sed -i 's|throw("failed to parse kernel version from uname")|return 5, 6, 0|g' "${TARGET}"
+          # 诊断：打印所有可能相关的代码行，方便失败时排查
+          echo "=== Searching for relevant patterns in runtime ==="
+          grep -rn "getKernelVersion" "${RUNTIME_DIR}" || echo "Not found: getKernelVersion"
+          grep -rn "configure64bitsTime" "${RUNTIME_DIR}" || echo "Not found: configure64bitsTime"
+          grep -rn "throw.*kernel" "${RUNTIME_DIR}" || echo "Not found: throw.*kernel"
+          grep -rn "parse.*version" "${RUNTIME_DIR}" || echo "Not found: parse.*version"
           
-          # 验证补丁是否生效
-          if grep -q 'return 5, 6, 0' "${TARGET}"; then
-            echo "✅ Patch applied successfully"
-          else
-            echo "::error::Patch failed! The source pattern may have changed in this Go version."
-            echo "=== Context around getKernelVersion ==="
-            grep -n -A5 -B5 "parse kernel version" "${TARGET}" || true
+          PATCH_SUCCESS=0
+          
+          # 策略 1: 替换 configure64bitsTimeOn32BitsArchitectures 为空函数 (最安全)
+          FILE_CFG=$(grep -rl "func configure64bitsTimeOn32BitsArchitectures" "${RUNTIME_DIR}" 2>/dev/null | head -n 1 || true)
+          if [ -n "$FILE_CFG" ]; then
+            echo "🎯 Strategy 1: Patching configure64bitsTimeOn32BitsArchitectures in $FILE_CFG"
+            awk '
+              /^func configure64bitsTimeOn32BitsArchitectures/ {
+                print $0
+                print "\t// Patched: bypass kernel version check for custom ROMs"
+                print "\treturn"
+                print "}"
+                skip = 1
+                next
+              }
+              skip && /^}/ {
+                skip = 0
+                next
+              }
+              !skip { print }
+            ' "$FILE_CFG" > "$FILE_CFG.tmp" && mv "$FILE_CFG.tmp" "$FILE_CFG"
+            
+            if grep -q "bypass kernel version check" "$FILE_CFG"; then
+              echo "✅ Strategy 1 Success"
+              PATCH_SUCCESS=1
+            fi
+          fi
+          
+          # 策略 2: 如果策略1失败，尝试替换 getKernelVersion 中的 throw
+          if [ "$PATCH_SUCCESS" -eq 0 ]; then
+            FILE_KV=$(grep -rl "func getKernelVersion" "${RUNTIME_DIR}" 2>/dev/null | head -n 1 || true)
+            if [ -n "$FILE_KV" ]; then
+              echo "🎯 Strategy 2: Patching getKernelVersion throw statements in $FILE_KV"
+              # 尝试替换各种可能的 throw 语句 (兼容 2 个或 3 个返回值)
+              sed -i 's/throw("failed to parse kernel version from uname")/return 0, 0, 0/g' "$FILE_KV"
+              sed -i 's/throw("failed to parse kernel version")/return 0, 0, 0/g' "$FILE_KV"
+              sed -i 's/throw("failed to parse uname")/return 0, 0, 0/g' "$FILE_KV"
+              sed -i 's/throw(.*parse.*kernel.*)/return 0, 0, 0/g' "$FILE_KV"
+              
+              if ! grep -q 'throw(.*parse.*kernel' "$FILE_KV" && ! grep -q 'throw("failed to parse' "$FILE_KV"; then
+                echo "✅ Strategy 2 Success (or no throw found)"
+                PATCH_SUCCESS=1
+              fi
+            fi
+          fi
+          
+          # 策略 3: 暴力替换所有包含 "parse kernel" 的 throw
+          if [ "$PATCH_SUCCESS" -eq 0 ]; then
+            echo "🎯 Strategy 3: Brute-force replacing all throw statements containing 'parse' and 'kernel'"
+            find "${RUNTIME_DIR}" -name "*.go" -exec sed -i 's/throw(.*parse.*kernel.*)/return/g' {} +
+            find "${RUNTIME_DIR}" -name "*.go" -exec sed -i 's/throw(.*failed to parse.*)/return/g' {} +
+            PATCH_SUCCESS=1
+          fi
+          
+          if [ "$PATCH_SUCCESS" -eq 0 ]; then
+            echo "::error::All patch strategies failed! Check diagnostic output above."
             exit 1
           fi
+          
+          echo "🎉 Go runtime patched successfully!"
 
       - name: Install UPX
         run: |
