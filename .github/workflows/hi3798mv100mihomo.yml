@@ -25,15 +25,18 @@ jobs:
           go-version: 1.23
           cache: false
 
-      # 核心修复：直接下载官方源码tar包，彻底避免git克隆失败问题
-      - name: 下载 mihomo 官方源码
+      # 核心修复：压缩包改名避免前缀冲突 + 精准匹配目录 + 校验文件
+      - name: 下载并解压 mihomo 源码
         run: |
-          # 指定稳定版本 v1.19.25，避免main分支波动
-          wget -O mihomo-src.tar.gz https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.25.tar.gz
-          tar -zxf mihomo-src.tar.gz
-          mv mihomo-* mihomo
+          # 压缩包改名，避免和源码目录前缀冲突
+          wget -O src.tar.gz https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.25.tar.gz
+          tar -zxf src.tar.gz
+          # 精准匹配解压后的目录并重命名
+          SRC_DIR=$(ls -d mihomo-*/ | head -1)
+          mv "$SRC_DIR" mihomo
+          # 校验核心文件
           cd mihomo
-          ls -la go.mod
+          ls -la go.mod main.go
           go env GOMOD
 
       - name: 编译 armv7 版 uname 伪装库
@@ -66,7 +69,6 @@ jobs:
           GO111MODULE: on
         run: |
           cd mihomo
-          # 根目录直接编译，主入口就在根目录
           go build \
             -ldflags "-w -s -X github.com/metacubex/mihomo/constant.Version=v1.19.25" \
             -tags "no_gvisor no_tun_newapi" \
