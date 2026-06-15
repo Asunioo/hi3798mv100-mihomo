@@ -22,6 +22,8 @@ jobs:
           repository: MetaCubeX/mihomo
           ref: ${{ github.event.inputs.mihomo_ref }}
           fetch-depth: 0
+          # 【修复点 1】：将 mihomo 源码检出到独立的子目录，避免与当前仓库冲突
+          path: mihomo-src
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -38,13 +40,6 @@ jobs:
           echo "=== Go Runtime Diagnostic Info ==="
           echo "GOROOT: $GOROOT"
           go version
-          
-          # 诊断：打印所有可能相关的代码行，方便失败时排查
-          echo "=== Searching for relevant patterns in runtime ==="
-          grep -rn "getKernelVersion" "${RUNTIME_DIR}" || echo "Not found: getKernelVersion"
-          grep -rn "configure64bitsTime" "${RUNTIME_DIR}" || echo "Not found: configure64bitsTime"
-          grep -rn "throw.*kernel" "${RUNTIME_DIR}" || echo "Not found: throw.*kernel"
-          grep -rn "parse.*version" "${RUNTIME_DIR}" || echo "Not found: parse.*version"
           
           PATCH_SUCCESS=0
           
@@ -79,7 +74,6 @@ jobs:
             FILE_KV=$(grep -rl "func getKernelVersion" "${RUNTIME_DIR}" 2>/dev/null | head -n 1 || true)
             if [ -n "$FILE_KV" ]; then
               echo "🎯 Strategy 2: Patching getKernelVersion throw statements in $FILE_KV"
-              # 尝试替换各种可能的 throw 语句 (兼容 2 个或 3 个返回值)
               sed -i 's/throw("failed to parse kernel version from uname")/return 0, 0, 0/g' "$FILE_KV"
               sed -i 's/throw("failed to parse kernel version")/return 0, 0, 0/g' "$FILE_KV"
               sed -i 's/throw("failed to parse uname")/return 0, 0, 0/g' "$FILE_KV"
@@ -101,7 +95,7 @@ jobs:
           fi
           
           if [ "$PATCH_SUCCESS" -eq 0 ]; then
-            echo "::error::All patch strategies failed! Check diagnostic output above."
+            echo "::error::All patch strategies failed!"
             exit 1
           fi
           
@@ -113,6 +107,8 @@ jobs:
           sudo apt-get install -y -qq upx-ucl
 
       - name: Build mihomo (static, armv7, patched runtime)
+        # 【修复点 2】：在 mihomo 源码子目录中执行编译
+        working-directory: mihomo-src
         env:
           CGO_ENABLED: "0"
           GOOS: linux
@@ -129,12 +125,16 @@ jobs:
             .
 
       - name: Compress with UPX
+        # 【修复点 3】：在子目录中执行 UPX
+        working-directory: mihomo-src
         run: |
           ls -lh mihomo-linux-armv7
           upx --best --lzma mihomo-linux-armv7 || echo "UPX skipped"
           ls -lh mihomo-linux-armv7
 
       - name: Verify binary
+        # 【修复点 4】：在子目录中执行验证
+        working-directory: mihomo-src
         run: |
           file mihomo-linux-armv7
           if ! file mihomo-linux-armv7 | grep -q "ELF 32-bit LSB executable, ARM"; then
@@ -146,5 +146,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mihomo-linux-armv7-latest-patched
-          path: mihomo-linux-armv7
+          # 【修复点 5】：上传路径指向子目录中的二进制文件
+          path: mihomo-src/mihomo-linux-armv7
           retention-days: 30
