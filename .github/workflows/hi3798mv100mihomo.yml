@@ -80,13 +80,14 @@ jobs:
           sudo apt install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross wget tar
           arm-linux-gnueabihf-gcc --version
 
-      - name: 配置最新稳定版 Go 环境
+      # 核心修复：固定 Go 1.23 版本，该版本兼容 Linux 4.4 + LD_PRELOAD 劫持
+      - name: 配置 Go 1.23 稳定编译环境
         if: steps.skip_decision.outputs.skip_build == 'false'
         uses: actions/setup-go@v5
         with:
-          go-version: 'stable'   # 修复：stable 是官方认可的最新稳定版别名
+          go-version: '1.23'
           cache: false
-          check-latest: true     # 确保拉取该分支下的最新补丁版
+          check-latest: true
 
       - name: 下载并解压最新版 mihomo 源码
         if: steps.skip_decision.outputs.skip_build == 'false'
