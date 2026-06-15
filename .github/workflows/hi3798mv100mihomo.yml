@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       mihomo_ref:
-        description: 'Mihomo branch/tag (default: alpha, the active dev branch)'
+        description: 'Mihomo branch/tag (default: main)'
         required: true
-        default: 'alpha'
+        default: 'main'
       go_version:
         description: 'Go version (>= 1.23 for latest mihomo)'
         required: true
@@ -24,21 +24,19 @@ jobs:
 
       - name: Clone mihomo source
         run: |
+          # 克隆 main 分支（mihomo 当前的活跃默认分支）
           git clone --depth 1 --branch ${{ github.event.inputs.mihomo_ref }} \
             https://github.com/MetaCubeX/mihomo.git mihomo-src
           
           echo "=== Verify checkout ==="
-          ls -la mihomo-src/
+          cd mihomo-src
+          ls -la
           
-          if [ ! -f mihomo-src/go.mod ]; then
-            echo "::error::go.mod not found! The branch '${{ github.event.inputs.mihomo_ref }}' may not exist or is outdated."
-            echo "Available branches:"
-            git -C mihomo-src branch -a 2>/dev/null || true
-            echo "Try using 'alpha' instead of 'main'."
+          if [ ! -f "go.mod" ]; then
+            echo "::error::go.mod not found! Something is wrong with the checkout."
             exit 1
           fi
-          
-          echo "✅ go.mod found, checkout is valid"
+          echo "✅ go.mod found. Current commit: $(git rev-parse --short HEAD)"
 
       - name: Patch Go runtime (Multi-Strategy Auto-Patch)
         run: |
@@ -52,7 +50,7 @@ jobs:
           
           PATCH_SUCCESS=0
           
-          # 策略 1: 重写 configure64bitsTimeOn32BitsArchitectures 为空函数
+          # 策略 1: 重写 configure64bitsTimeOn32BitsArchitectures 为空函数 (最彻底)
           FILE_CFG=$(grep -rl "func configure64bitsTimeOn32BitsArchitectures" "${RUNTIME_DIR}" 2>/dev/null | head -n 1 || true)
           if [ -n "$FILE_CFG" ]; then
             echo "🎯 Strategy 1: Patching configure64bitsTimeOn32BitsArchitectures in $FILE_CFG"
@@ -78,7 +76,7 @@ jobs:
             fi
           fi
           
-          # 策略 2: 替换 getKernelVersion 中的 throw
+          # 策略 2: 替换 getKernelVersion 中的 throw (兼容旧版 Go)
           if [ "$PATCH_SUCCESS" -eq 0 ]; then
             FILE_KV=$(grep -rl "func getKernelVersion" "${RUNTIME_DIR}" 2>/dev/null | head -n 1 || true)
             if [ -n "$FILE_KV" ]; then
@@ -121,7 +119,7 @@ jobs:
           GOARCH: arm
           GOARM: "7"
         run: |
-          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "${{ github.event.inputs.mihomo_ref }}")
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "${{ github.event.inputs.mihomo_ref }}-$(git rev-parse --short HEAD)")
           echo "Building mihomo ${VERSION} with $(go version)"
           
           go build \
