@@ -1,6 +1,11 @@
 name: Build Mihomo armv7 for Linux 4.4 (Auto Update)
 on:
-  workflow_dispatch:    # 手动触发
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: '强制重新构建（忽略版本缓存）'
+        type: boolean
+        default: true
   schedule:
     - cron: '0 */6 * * *'  # 每6小时自动检测一次新版本（UTC时间）
 
@@ -15,11 +20,10 @@ jobs:
       - name: Checkout 当前仓库
         uses: actions/checkout@v4
 
-      # ========== 1. 获取 mihomo 官方最新正式版本号 ==========
+      # 1. 获取 mihomo 官方最新正式版本号
       - name: 获取 mihomo 最新 release 版本
         id: get_version
         run: |
-          # 调用GitHub API获取最新正式版tag（排除预发布版）
           LATEST_TAG=$(curl -s \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
@@ -31,18 +35,31 @@ jobs:
           fi
           
           echo "检测到 mihomo 最新正式版: $LATEST_TAG"
+          echo "触发方式: ${{ github.event_name }}"
           echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
 
-      # ========== 2. 缓存上次构建版本，判断是否需要重新构建 ==========
-      - name: 读取上次构建版本
+      # 2. 仅定时运行时读取版本缓存，手动运行直接跳过缓存判断
+      - name: 读取上次构建版本（仅定时触发生效）
         id: check_version
+        if: github.event_name == 'schedule'
         uses: actions/cache@v4
         with:
           path: .last_build_version
           key: mihomo-last-build-${{ steps.get_version.outputs.latest_tag }}
       
       - name: 判断是否跳过构建
+        id: skip_decision
         run: |
+          # 手动触发：默认强制构建，不跳过
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "${{ inputs.force_build }}" = "true" ]; then
+              echo "手动触发，强制构建"
+              echo "skip_build=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          
+          # 定时触发：检查版本缓存
           if [ -f .last_build_version ]; then
             LAST_VER=$(cat .last_build_version)
             if [ "$LAST_VER" = "${{ steps.get_version.outputs.latest_tag }}" ]; then
@@ -51,42 +68,40 @@ jobs:
               exit 0
             fi
           fi
+          
           echo "检测到新版本，开始构建"
           echo "skip_build=false" >> $GITHUB_OUTPUT
 
-      # ========== 以下步骤仅在有新版本时执行 ==========
+      # ========== 以下步骤仅在不跳过时执行 ==========
       - name: 安装 ARM 交叉编译工具链
-        if: steps.check_version.outputs.skip_build == 'false'
+        if: steps.skip_decision.outputs.skip_build == 'false'
         run: |
           sudo apt update
           sudo apt install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross wget tar
           arm-linux-gnueabihf-gcc --version
 
       - name: 配置最新稳定版 Go 环境
-        if: steps.check_version.outputs.skip_build == 'false'
+        if: steps.skip_decision.outputs.skip_build == 'false'
         uses: actions/setup-go@v5
         with:
-          go-version: 'latest'  # 自动使用最新稳定版Go
+          go-version: 'latest'
           cache: false
           check-latest: true
 
       - name: 下载并解压最新版 mihomo 源码
-        if: steps.check_version.outputs.skip_build == 'false'
+        if: steps.skip_decision.outputs.skip_build == 'false'
         run: |
           TAG="${{ steps.get_version.outputs.latest_tag }}"
-          # 动态拼接最新版源码下载地址
           wget -O src.tar.gz "https://github.com/MetaCubeX/mihomo/archive/refs/tags/${TAG}.tar.gz"
           tar -zxf src.tar.gz
-          # 自动匹配解压目录并重命名
           SRC_DIR=$(ls -d mihomo-*/ | head -1)
           mv "$SRC_DIR" mihomo
-          # 校验核心文件
           cd mihomo
           ls -la go.mod main.go
           go env GOMOD
 
       - name: 编译 ARM 版 uname 内核伪装库
-        if: steps.check_version.outputs.skip_build == 'false'
+        if: steps.skip_decision.outputs.skip_build == 'false'
         run: |
           cat > uname_hack.c <<'EOF'
           #define _GNU_SOURCE
@@ -106,7 +121,7 @@ jobs:
           file libfakeuname.so
 
       - name: 静态编译 mihomo armv7 二进制
-        if: steps.check_version.outputs.skip_build == 'false'
+        if: steps.skip_decision.outputs.skip_build == 'false'
         env:
           CGO_ENABLED: 1
           GOOS: linux
@@ -127,7 +142,7 @@ jobs:
           file mihomo-linux-armv7-static
 
       - name: 打包发布制品（带版本号）
-        if: steps.check_version.outputs.skip_build == 'false'
+        if: steps.skip_decision.outputs.skip_build == 'false'
         run: |
           TAG="${{ steps.get_version.outputs.latest_tag }}"
           mkdir -p release
@@ -142,20 +157,19 @@ jobs:
           EOF
           chmod +x release/run.sh
           
-          # 压缩包文件名带上版本号
           tar -zcf "mihomo-${TAG}-armv7-linux4.4.tar.gz" -C release .
           ls -lh "mihomo-${TAG}-armv7-linux4.4.tar.gz"
 
       - name: 上传构建产物
-        if: steps.check_version.outputs.skip_build == 'false'
+        if: steps.skip_decision.outputs.skip_build == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: mihomo-${{ steps.get_version.outputs.latest_tag }}-armv7-linux4.4
           path: mihomo-${{ steps.get_version.outputs.latest_tag }}-armv7-linux4.4.tar.gz
 
-      # ========== 3. 记录本次构建版本，用于下次对比 ==========
+      # 3. 构建成功后更新版本记录（仅定时触发时更新缓存）
       - name: 更新构建版本记录
-        if: steps.check_version.outputs.skip_build == 'false' && success()
+        if: steps.skip_decision.outputs.skip_build == 'false' && success() && github.event_name == 'schedule'
         run: |
           echo "${{ steps.get_version.outputs.latest_tag }}" > .last_build_version
           echo "已记录本次构建版本: ${{ steps.get_version.outputs.latest_tag }}"
