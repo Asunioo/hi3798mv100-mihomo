@@ -1,4 +1,4 @@
-name: Build Mihomo armv7 Linux Static
+name: Build Mihomo armv7 Linux4.4 Static
 on:
   workflow_dispatch:
   schedule:
@@ -10,22 +10,33 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout mihomo source
+      - name: Checkout 本仓库
+        uses: actions/checkout@v4
+
+      - name: Checkout mihomo 官方源码
         uses: actions/checkout@v4
         with:
           repository: MetaCubeX/mihomo
           ref: main
           path: mihomo
+          fetch-depth: 0
 
-      # 1. 准备Go环境
+      # 安装 ARM 交叉编译工具链
+      - name: Install ARM cross toolchain
+        run: |
+          sudo apt update
+          sudo apt install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+          arm-linux-gnueabihf-gcc --version
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: 1.23
           cache: true
+          cache-dependency-path: mihomo/go.sum
 
-      # 2. 编译uname-hack静态库，用于LD_PRELOAD伪装内核版本
-      - name: Build uname fake lib for Linux4.4
+      # 编译 ARM 版 uname 伪装库
+      - name: Build armv7 libfakeuname.so
         run: |
           cat > uname_hack.c <<'EOF'
           #define _GNU_SOURCE
@@ -34,49 +45,58 @@ jobs:
           #include <string.h>
 
           int uname(struct utsname *buf) {
-            static int (*orig_uname)(struct utsname *) = NULL;
-            if (!orig_uname) orig_uname = dlsym(RTLD_NEXT, "uname");
-            int ret = orig_uname(buf);
-            // 伪装内核版本 >=5.4 绕过mihomo/go内核检测
-            strcpy(buf->release, "5.4.0");
-            return ret;
+              static int (*orig_uname)(struct utsname *) = NULL;
+              if (!orig_uname) orig_uname = dlsym(RTLD_NEXT, "uname");
+              int ret = orig_uname(buf);
+              strcpy(buf->release, "5.4.0-fake");
+              return ret;
           }
           EOF
-          gcc -shared -fPIC -ldl uname_hack.c -o libfakeuname.so
-          ls -lh libfakeuname.so
+          # 用 ARM 交叉编译器编译
+          arm-linux-gnueabihf-gcc -shared -fPIC -ldl uname_hack.c -o libfakeuname.so
+          file libfakeuname.so
 
-      # 3. 编译armv7静态mihomo
-      - name: Compile static armv7 binary
+      # 静态编译 mihomo armv7
+      - name: Compile mihomo armv7 static
         env:
           CGO_ENABLED: 1
           GOOS: linux
           GOARCH: arm
           GOARM: 7
-          # 关闭新内核特性
-          CFLAGS: "-static -O2 -march=armv7-a -mtune=cortex-a9"
-          LDFLAGS: "-linkmode external -extldflags '-static'"
+          CC: arm-linux-gnueabihf-gcc
+          CXX: arm-linux-gnueabihf-g++
         run: |
           cd mihomo
-          # 构建参数：关闭tun新特性、静态全打包
+          # 强制模块模式，指定入口包路径
           go build \
             -ldflags "-w -s -X github.com/metacubex/mihomo/constant.Version=$(git describe --tags --always)" \
             -tags "no_gvisor no_tun_newapi" \
-            -o ../mihomo-linux-armv7-static
+            -o ../mihomo-linux-armv7-static \
+            ./cmd/mihomo
           cd ..
           chmod +x mihomo-linux-armv7-static
           file mihomo-linux-armv7-static
 
-      # 4. 打包二进制+伪装库（部署到机顶盒一并上传）
-      - name: Archive artifacts
+      # 打包制品
+      - name: Package artifacts
         run: |
-          mkdir output
-          cp mihomo-linux-armv7-static output/
-          cp libfakeuname.so output/
-          tar -zcf mihomo-armv7-linux4.4.tar.gz output/
+          mkdir -p release
+          cp mihomo-linux-armv7-static release/
+          cp libfakeuname.so release/
+          
+          cat > release/run.sh <<'EOF'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+          export LD_PRELOAD="$SCRIPT_DIR/libfakeuname.so"
+          exec "$SCRIPT_DIR/mihomo-linux-armv7-static" -d "$SCRIPT_DIR/config" "$@"
+          EOF
+          chmod +x release/run.sh
+          
+          tar -zcf mihomo-armv7-linux4.4.tar.gz -C release .
+          ls -lh mihomo-armv7-linux4.4.tar.gz
 
-      # 5. 上传制品
-      - name: Upload Build Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mihomo-armv7-linux44
+          name: mihomo-armv7-linux4.4
           path: mihomo-armv7-linux4.4.tar.gz
