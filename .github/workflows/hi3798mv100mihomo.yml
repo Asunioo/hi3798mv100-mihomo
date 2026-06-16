@@ -18,38 +18,46 @@ jobs:
       - name: Checkout 当前仓库
         uses: actions/checkout@v4
 
+      - name: 打印事件（调试用）
+        run: echo '${{ toJson(github.event) }}'
+
       - name: 确定版本号
         id: get_version
         run: |
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
             TAG="${{ github.event.client_payload.tag }}"
-          elif [ -n "${{ inputs.tag }}" ]; then
-            TAG="${{ inputs.tag }}"
+          elif [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
           else
             TAG=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
               | grep -oP '"tag_name": "\K(.*)(?=")')
           fi
 
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            echo "❌ 获取版本失败"
+            exit 1
+          fi
+
           echo "构建版本: $TAG"
           echo "latest_tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: 安装 ARM 交叉编译工具链
+      - name: 安装工具链
         run: |
           sudo apt update
           sudo apt install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross wget tar jq
 
-      - name: 配置 Go 1.23
+      - name: 配置 Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
-          cache: false
 
       - name: 下载源码
         run: |
           TAG="${{ steps.get_version.outputs.latest_tag }}"
           wget -O src.tar.gz "https://github.com/MetaCubeX/mihomo/archive/refs/tags/${TAG}.tar.gz"
           tar -zxf src.tar.gz
-          mv mihomo-* mihomo
+          SRC_DIR=$(ls -d mihomo-* | head -n 1)
+          mv "$SRC_DIR" mihomo
 
       - name: 编译 uname hack
         run: |
@@ -76,7 +84,6 @@ jobs:
           GOARCH: arm
           GOARM: 7
           CC: arm-linux-gnueabihf-gcc
-          CXX: arm-linux-gnueabihf-g++
         run: |
           cd mihomo
           TAG="${{ steps.get_version.outputs.latest_tag }}"
@@ -99,12 +106,12 @@ jobs:
           export LD_PRELOAD="$DIR/libfakeuname.so"
           exec "$DIR/mihomo-linux-armv7-static" -d "$DIR"
           EOF
-          chmod +x release/run.sh
 
+          chmod +x release/run.sh
           tar -zcf "mihomo-${TAG}-armv7-linux4.4.tar.gz" -C release .
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: mihomo-${{ steps.get_version.outputs.latest_tag }}
+          name: mihomo-${{ steps.get_version.outputs.latest_tag }}-armv7
           path: mihomo-${{ steps.get_version.outputs.latest_tag }}-armv7-linux4.4.tar.gz
