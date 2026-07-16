@@ -21,28 +21,48 @@ jobs:
       - name: 打印事件（调试用）
         run: echo '${{ toJson(github.event) }}'
 
+      - name: 预安装 jq（版本解析用）
+        run: |
+          sudo apt update && sudo apt install -y jq
+
       - name: 确定版本号
         id: get_version
         run: |
+          set -euo pipefail
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
             TAG="${{ github.event.client_payload.tag }}"
+            # 兜底：payload 未传 tag 时自动获取官方最新版本
+            if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+              TAG=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name')
+            fi
           elif [ -n "${{ github.event.inputs.tag }}" ]; then
             TAG="${{ github.event.inputs.tag }}"
           else
-            TAG=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
-              | grep -oP '"tag_name": "\K(.*)(?=")')
+            TAG=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name')
           fi
-
           if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
             echo "❌ 获取版本失败"
             exit 1
           fi
-
           echo "构建版本: $TAG"
           echo "latest_tag=$TAG" >> $GITHUB_OUTPUT
 
+      - name: 版本一致性校验
+        id: check_version
+        uses: actions/cache@v4
+        with:
+          path: .last_build_version
+          key: mihomo-armv7-build-${{ steps.get_version.outputs.latest_tag }}
+
+      - name: 无新版本则跳过编译
+        if: steps.check_version.outputs.cache-hit == 'true' && github.event_name != 'workflow_dispatch'
+        run: |
+          echo "当前版本 ${{ steps.get_version.outputs.latest_tag }} 已构建完成，跳过本次编译"
+          exit 0
+
       - name: 安装工具链
         run: |
+          set -euo pipefail
           sudo apt update
           sudo apt install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross wget tar jq
 
@@ -53,6 +73,7 @@ jobs:
 
       - name: 下载源码
         run: |
+          set -euo pipefail
           TAG="${{ steps.get_version.outputs.latest_tag }}"
           wget -O src.tar.gz "https://github.com/MetaCubeX/mihomo/archive/refs/tags/${TAG}.tar.gz"
           tar -zxf src.tar.gz
@@ -61,12 +82,12 @@ jobs:
 
       - name: 编译 uname hack
         run: |
-          cat > uname_hack.c <<'EOF'
+          set -euo pipefail
+          cat > uname_hack.c <<'UNAMEEOF'
           #define _GNU_SOURCE
           #include <sys/utsname.h>
           #include <dlfcn.h>
           #include <string.h>
-
           int uname(struct utsname *buf) {
               static int (*orig_uname)(struct utsname *) = NULL;
               if (!orig_uname) orig_uname = dlsym(RTLD_NEXT, "uname");
@@ -74,7 +95,7 @@ jobs:
               strcpy(buf->release, "5.4.0-fake");
               return ret;
           }
-          EOF
+          UNAMEEOF
           arm-linux-gnueabihf-gcc -shared -fPIC -ldl uname_hack.c -o libfakeuname.so
 
       - name: 编译 mihomo
@@ -85,6 +106,7 @@ jobs:
           GOARM: 7
           CC: arm-linux-gnueabihf-gcc
         run: |
+          set -euo pipefail
           cd mihomo
           TAG="${{ steps.get_version.outputs.latest_tag }}"
           go build \
@@ -95,20 +117,22 @@ jobs:
 
       - name: 打包
         run: |
+          set -euo pipefail
           TAG="${{ steps.get_version.outputs.latest_tag }}"
           mkdir release
           cp mihomo-linux-armv7-static release/
           cp libfakeuname.so release/
-
-          cat > release/run.sh <<'EOF'
+          cat > release/run.sh <<'RUNEOF'
           #!/bin/bash
           DIR="$(cd "$(dirname "$0")" && pwd)"
           export LD_PRELOAD="$DIR/libfakeuname.so"
           exec "$DIR/mihomo-linux-armv7-static" -d "$DIR"
-          EOF
-
+          RUNEOF
           chmod +x release/run.sh
           tar -zcf "mihomo-${TAG}-armv7-linux4.4.tar.gz" -C release .
+
+      - name: 记录本次构建版本
+        run: echo "${{ steps.get_version.outputs.latest_tag }}" > .last_build_version
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
