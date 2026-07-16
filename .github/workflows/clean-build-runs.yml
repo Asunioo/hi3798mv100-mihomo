@@ -1,4 +1,3 @@
-cat > .github/workflows/clean-build-runs.yml <<'EOF'
 name: 清理Mihomo编译构建历史记录
 
 on:
@@ -24,4 +23,3 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh run delete ${{ github.run_id }}
-EOF
