@@ -1,14 +1,16 @@
 name: 清理Mihomo编译构建历史记录
 on:
   schedule:
-    - cron: '0 2 1 * *'
+    - cron: '0 2 * * *'
   workflow_dispatch:
+
 jobs:
   clean_build:
     runs-on: ubuntu-latest
     permissions:
       actions: write
     steps:
+      # 第一步：清理编译构建工作流旧记录
       - name: 删除旧构建运行记录
         uses: Mattraks/delete-workflow-runs@v2
         with:
@@ -16,3 +18,16 @@ jobs:
           keep_minimum_runs: 5
           retain_days: 0
           delete_workflow_pattern: "Build Mihomo armv7 for Linux 4.4 (Dispatch)"
+
+      # 第二步：清理【本清理脚本】所有历史旧记录（只保留当前本次）
+      - name: 清除本清理脚本过往全部运行记录
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # 获取当前工作流名称
+          WF_NAME="${{ github.workflow }}"
+          # 获取当前运行ID，过滤掉自己，删除其余全部历史
+          ALL_RUNS=$(gh run list --workflow "$WF_NAME" --repo ${{ github.repository }} --json databaseId --limit 100)
+          echo "$ALL_RUNS" | jq -r ".[] | select(.databaseId != ${{ github.run_id }}) | .databaseId" | xargs -P 5 -I{} gh run delete {} --repo ${{ github.repository }}
+          echo "已清理本脚本所有历史旧记录，仅保留本次运行"
