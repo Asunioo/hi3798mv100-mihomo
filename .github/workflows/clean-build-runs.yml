@@ -1,9 +1,9 @@
+cat > .github/workflows/clean-build-runs.yml <<'EOF'
 name: 清理Mihomo编译构建历史记录
+
 on:
-  # 每日凌晨2点自动清理
   schedule:
     - cron: '0 2 * * *'
-  # 页面手动一键执行
   workflow_dispatch:
 
 jobs:
@@ -16,7 +16,12 @@ jobs:
         uses: Mattraks/delete-workflow-runs@v2
         with:
           token: ${{ github.token }}
-          # 保留最近10条构建记录，更早全部删除
-          keep_minimum_runs: 10
+          keep_minimum_runs: 5
           retain_days: 0
           workflow_name: "Build Mihomo armv7 for Linux 4.4 (Dispatch)"
+
+      - name: 清理自身运行记录（无痕执行）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run delete ${{ github.run_id }}
+EOF
